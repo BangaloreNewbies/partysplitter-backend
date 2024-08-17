@@ -1,0 +1,4 @@
+/venv
+/volume
+.env.local
+/__pycache__
