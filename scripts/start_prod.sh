@@ -6,9 +6,12 @@ cd /opt/app
 # Activate virtual environment
 source /opt/app/venv/bin/activate
 
+# Detect AWS CLI location
+AWS_CLI=$(which aws)
+
 # Function to get parameter from SSM
 get_ssm_parameter() {
-    aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text
+    $AWS_CLI ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text
 }
 
 # Set environment variables from SSM
