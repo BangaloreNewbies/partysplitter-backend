@@ -18,6 +18,7 @@ export SECRET_KEY=$(get_ssm_parameter "/myapp/SECRET_KEY")
 export GOOGLE_API_KEY=$(get_ssm_parameter "/myapp/GOOGLE_API_KEY")
 export WSS_URL=$(get_ssm_parameter "/myapp/WSS_URL")
 export WEBSOCKET_LAMBDA_NAME=$(get_ssm_parameter "/myapp/WEBSOCKET_LAMBDA_NAME")
+export AWS_DEFAULT_REGION=$(get_ssm_parameter "/myapp/AWS_DEFAULT_REGION")
 
 # Print the values for debugging (remove in production)
 echo "S3_BUCKET: $S3_BUCKET"
@@ -26,7 +27,7 @@ echo "SECRET_KEY: ${SECRET_KEY:0:5}..." # Only print first 5 characters
 echo "GOOGLE_API_KEY: ${GOOGLE_API_KEY:0:5}..." # Only print first 5 characters
 echo "WSS_URL: $WSS_URL"
 echo "WEBSOCKET_LAMBDA_NAME: $WEBSOCKET_LAMBDA_NAME"
-
+echo "AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION"
 # Additional environment variables
 export FLASK_APP=app.py
 export FLASK_ENV=production
