@@ -14,16 +14,24 @@ get_ssm_parameter() {
     $AWS_CLI ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text
 }
 
-# Set environment variables from SSM
+# Set AWS credentials
+export AWS_ACCESS_KEY_ID=$(get_ssm_parameter "/myapp/AWS_ACCESS_KEY_ID")
+export AWS_SECRET_ACCESS_KEY=$(get_ssm_parameter "/myapp/AWS_SECRET_ACCESS_KEY")
+export AWS_DEFAULT_REGION=$(get_ssm_parameter "/myapp/AWS_DEFAULT_REGION")
+
+# Verify AWS credentials are set
+if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+    echo "Error: AWS credentials are not set properly."
+    exit 1
+fi
+
+# Set other environment variables from SSM
 export S3_BUCKET=$(get_ssm_parameter "/myapp/S3_BUCKET")
 export CONNECTIONS_TABLE=$(get_ssm_parameter "/myapp/CONNECTIONS_TABLE")
 export SECRET_KEY=$(get_ssm_parameter "/myapp/SECRET_KEY")
 export GOOGLE_API_KEY=$(get_ssm_parameter "/myapp/GOOGLE_API_KEY")
-export AWS_DEFAULT_REGION=$(get_ssm_parameter "/myapp/AWS_DEFAULT_REGION")
 export WSS_URL=$(get_ssm_parameter "/myapp/WSS_URL")
 export WEBSOCKET_LAMBDA_NAME=$(get_ssm_parameter "/myapp/WEBSOCKET_LAMBDA_NAME")
-export AWS_ACCESS_KEY_ID=$(get_ssm_parameter "/myapp/AWS_ACCESS_KEY_ID")
-export AWS_SECRET_ACCESS_KEY=$(get_ssm_parameter "/myapp/AWS_SECRET_ACCESS_KEY")
 
 # Additional environment variables
 export FLASK_APP=app.py
