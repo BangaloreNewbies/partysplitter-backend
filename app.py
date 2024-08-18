@@ -14,7 +14,7 @@ import re
 def check_environment_variables():
     required_vars = [
         "S3_BUCKET", "CONNECTIONS_TABLE", "SECRET_KEY",
-        "GOOGLE_API_KEY", "AWS_DEFAULT_REGION", "WSS_URL",
+        "GOOGLE_API_KEY", "WSS_URL",
         "WEBSOCKET_LAMBDA_NAME"
     ]
 
@@ -31,7 +31,6 @@ S3_BUCKET = os.environ['S3_BUCKET']
 CONNECTIONS_TABLE = os.environ['CONNECTIONS_TABLE']
 GOOGLE_API_KEY = os.environ['GOOGLE_API_KEY']
 SECRET_KEY = os.environ['SECRET_KEY']
-AWS_DEFAULT_REGION = os.environ['AWS_DEFAULT_REGION']
 WSS_URL = os.environ['WSS_URL']
 WEBSOCKET_LAMBDA_NAME = os.environ['WEBSOCKET_LAMBDA_NAME']
 ENDPOINT_URL = os.environ.get('ENDPOINT_URL')
