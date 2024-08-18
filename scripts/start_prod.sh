@@ -6,32 +6,26 @@ cd /opt/app
 # Activate virtual environment
 source /opt/app/venv/bin/activate
 
-# Detect AWS CLI location
-AWS_CLI=$(which aws)
-
 # Function to get parameter from SSM
 get_ssm_parameter() {
-    $AWS_CLI ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text
+    aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text
 }
 
-# Set AWS credentials
-export AWS_ACCESS_KEY_ID=$(get_ssm_parameter "/myapp/AWS_ACCESS_KEY_ID")
-export AWS_SECRET_ACCESS_KEY=$(get_ssm_parameter "/myapp/AWS_SECRET_ACCESS_KEY")
-export AWS_DEFAULT_REGION=$(get_ssm_parameter "/myapp/AWS_DEFAULT_REGION")
-
-# Verify AWS credentials are set
-if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-    echo "Error: AWS credentials are not set properly."
-    exit 1
-fi
-
-# Set other environment variables from SSM
+# Set environment variables from SSM
 export S3_BUCKET=$(get_ssm_parameter "/myapp/S3_BUCKET")
 export CONNECTIONS_TABLE=$(get_ssm_parameter "/myapp/CONNECTIONS_TABLE")
 export SECRET_KEY=$(get_ssm_parameter "/myapp/SECRET_KEY")
 export GOOGLE_API_KEY=$(get_ssm_parameter "/myapp/GOOGLE_API_KEY")
 export WSS_URL=$(get_ssm_parameter "/myapp/WSS_URL")
 export WEBSOCKET_LAMBDA_NAME=$(get_ssm_parameter "/myapp/WEBSOCKET_LAMBDA_NAME")
+
+# Print the values for debugging (remove in production)
+echo "S3_BUCKET: $S3_BUCKET"
+echo "CONNECTIONS_TABLE: $CONNECTIONS_TABLE"
+echo "SECRET_KEY: ${SECRET_KEY:0:5}..." # Only print first 5 characters
+echo "GOOGLE_API_KEY: ${GOOGLE_API_KEY:0:5}..." # Only print first 5 characters
+echo "WSS_URL: $WSS_URL"
+echo "WEBSOCKET_LAMBDA_NAME: $WEBSOCKET_LAMBDA_NAME"
 
 # Additional environment variables
 export FLASK_APP=app.py
