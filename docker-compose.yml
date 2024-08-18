@@ -2,30 +2,25 @@ services:
   localstack:
     image: localstack/localstack-pro:latest
     environment:
-      - SERVICES=s3,sqs,dynamodb,ssm
+      - SERVICES=s3,sqs,dynamodb,ssm,lambda,iam,apigateway,apigatewaymanagementapi,logs
       - DEBUG=1
-      - DATA_DIR=/tmp/localstack/data
+      - DATA_DIR=/var/lib/localstack/data
       - DOCKER_HOST=unix:///var/run/docker.sock
       - AWS_DEFAULT_REGION=ap-south-1
       - EDGE_PORT=4566
       - LOCALSTACK_AUTH_TOKEN=ls-yOvE5542-gIju-vOgi-gumU-4044yuXUab4f
       - LOCALSTACK_WEB_UI=true
+      - PERSISTENCE=1  # Enable persistence
     ports:
       - "127.0.0.1:4566:4566"
       - "127.0.0.1:4510-4559:4510-4559"
     volumes:
       - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - localstack_network
 
-  setup-aws-resources:
-    image: amazon/aws-cli
-    environment:
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=ap-south-1
-    entrypoint: /bin/sh
-    volumes:
-      - ./setup-aws.sh:/setup-aws.sh
-    command: /setup-aws.sh
-    depends_on:
-      - localstack
+networks:
+  localstack_network:
+    name: localstack_network
+    driver: bridge

@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  # IAM Role for Lambda to access necessary services
+  WebSocketLambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "WebSocketLambdaPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: "Allow"
+                Action:
+                  - "execute-api:ManageConnections"
+                Resource: "arn:aws:execute-api:*:*:*/@connections/*"
+
+  # Lambda function that handles $connect, $disconnect, and sendMessage
+  WebSocketHandlerFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: "index.handler"
+      Role: !GetAtt WebSocketLambdaExecutionRole.Arn
+      Runtime: "python3.9"
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import boto3
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              route_key = event.get('requestContext', {}).get('routeKey')
+              connection_id = event.get('requestContext', {}).get('connectionId')
+              apig_management_client = boto3.client(
+                  'apigatewaymanagementapi',
+                  endpoint_url=f"https://{event['requestContext']['domainName']}/{event['requestContext']['stage']}"
+              )
+
+              logger.info(f"Route: {route_key}, ConnectionID: {connection_id}")
+
+              if route_key == '$connect':
+                  logger.info(f"Connected: {connection_id}")
+                  return { "statusCode": 200 }
+
+              elif route_key == '$disconnect':
+                  logger.info(f"Disconnected: {connection_id}")
+                  return { "statusCode": 200 }
+
+              elif route_key == 'sendMessage':
+                  body = json.loads(event.get('body', '{}'))
+                  message_type = body.get('type')
+
+                  if message_type == 'get_connection':
+                      response_message = {"type": "connection_id", "connection_id": connection_id}
+                      apig_management_client.post_to_connection(
+                          ConnectionId=connection_id,
+                          Data=json.dumps(response_message)
+                      )
+                      logger.info(f"Sent Connection ID: {connection_id}")
+                  
+                  elif message_type == 'processed_data':
+                      payload = body.get('payload', 'No payload provided')
+                      response_message = {"type": "processed_data", "payload": payload}
+                      apig_management_client.post_to_connection(
+                          ConnectionId=connection_id,
+                          Data=json.dumps(response_message)
+                      )
+                      logger.info(f"Processed Data Sent: {payload}")
+                  
+                  else:
+                      response_message = {"type": "unknown", "message": "Unknown message type"}
+                      apig_management_client.post_to_connection(
+                          ConnectionId=connection_id,
+                          Data=json.dumps(response_message)
+                      )
+                      logger.info(f"Unknown message type received")
+
+                  return { "statusCode": 200 }
+
+  # WebSocket API
+  WebSocketApi:
+    Type: "AWS::ApiGatewayV2::Api"
+    Properties:
+      Name: "WebSocketApi"
+      ProtocolType: "WEBSOCKET"
+      RouteSelectionExpression: "$request.body.action"
+
+  # WebSocket Routes - $connect
+  WebSocketRouteConnect:
+    Type: "AWS::ApiGatewayV2::Route"
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: "$connect"
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  # WebSocket Routes - $disconnect
+  WebSocketRouteDisconnect:
+    Type: "AWS::ApiGatewayV2::Route"
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: "$disconnect"
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  # WebSocket Routes - sendMessage
+  WebSocketRouteSendMessage:
+    Type: "AWS::ApiGatewayV2::Route"
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: "sendMessage"
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  # Integration between WebSocket and Lambda
+  WebSocketIntegration:
+    Type: "AWS::ApiGatewayV2::Integration"
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: "AWS_PROXY"
+      IntegrationUri: !Sub 
+        - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketHandlerFunction.Arn}/invocations
+        - WebSocketHandlerFunction: !GetAtt WebSocketHandlerFunction.Arn
+
+  # Deployment for the WebSocket API
+  WebSocketApiDeployment:
+    Type: "AWS::ApiGatewayV2::Deployment"
+    DependsOn: 
+      - WebSocketRouteConnect
+      - WebSocketRouteDisconnect
+      - WebSocketRouteSendMessage
+    Properties:
+      ApiId: !Ref WebSocketApi
+
+  # Stage for the WebSocket API
+  WebSocketApiStage:
+    Type: "AWS::ApiGatewayV2::Stage"
+    Properties:
+      StageName: "prod"
+      ApiId: !Ref WebSocketApi
+      DeploymentId: !Ref WebSocketApiDeployment
+
+  # Permission for API Gateway to invoke Lambda
+  LambdaInvokePermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref WebSocketHandlerFunction
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+

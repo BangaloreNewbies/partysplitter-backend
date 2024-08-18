@@ -343,7 +343,7 @@ Resources:
       Environment:
         Variables:
           ALB_DNS: !GetAtt ApplicationLoadBalancer.DNSName
-          SECRET_KEY_SSM_PATH: !Ref SecretKeySSMPath
+          SECRET_KEY: !Ref SecretKeySSMPath
       Timeout: 30
 
   # Lambda Execution Role

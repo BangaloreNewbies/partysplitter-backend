@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from functools import wraps
 import boto3
 import os
@@ -7,37 +8,40 @@ import uuid
 import base64
 import google.generativeai as genai
 from botocore.exceptions import ClientError
+import traceback
+import re
 
 def check_environment_variables():
     required_vars = [
-        "S3_BUCKET", "SQS_QUEUE_URL", "CONNECTIONS_TABLE",
-        "WEBSOCKET_API", "GOOGLE_API_KEY", "SECRET_KEY",
-        "AWS_DEFAULT_REGION"
+        "S3_BUCKET", "CONNECTIONS_TABLE", "SECRET_KEY",
+        "GOOGLE_API_KEY", "AWS_DEFAULT_REGION", "WSS_URL",
+        "WEBSOCKET_LAMBDA_NAME"
     ]
+
     missing_vars = [var for var in required_vars if not os.getenv(var)]
+
     if missing_vars:
-        raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        raise EnvironmentError(f"Missing required environment variables : {', '.join(missing_vars)}")
 
 # Run the check immediately
 check_environment_variables()
 
 # Now it's safe to access these variables
 S3_BUCKET = os.environ['S3_BUCKET']
-SQS_QUEUE_URL = os.environ['SQS_QUEUE_URL']
 CONNECTIONS_TABLE = os.environ['CONNECTIONS_TABLE']
-WEBSOCKET_API = os.environ['WEBSOCKET_API']
 GOOGLE_API_KEY = os.environ['GOOGLE_API_KEY']
 SECRET_KEY = os.environ['SECRET_KEY']
+AWS_DEFAULT_REGION = os.environ['AWS_DEFAULT_REGION']
+WSS_URL = os.environ['WSS_URL']
+WEBSOCKET_LAMBDA_NAME = os.environ['WEBSOCKET_LAMBDA_NAME']
+ENDPOINT_URL = os.environ.get('ENDPOINT_URL')
 
 app = Flask(__name__)
-
-# Determine the endpoint URL and AWS region based on the environment
-ENDPOINT_URL = os.environ.get('ENDPOINT_URL')
-AWS_REGION = os.environ.get('AWS_DEFAULT_REGION')
+CORS(app)  # This enables CORS for all routes
 
 # Function to get boto3 client args
 def get_boto3_client_args():
-    args = {'region_name': AWS_REGION}
+    args = {'region_name': AWS_DEFAULT_REGION}
     if ENDPOINT_URL:
         args['endpoint_url'] = ENDPOINT_URL
     return args
@@ -46,6 +50,7 @@ def get_boto3_client_args():
 s3_client = boto3.client('s3', **get_boto3_client_args())
 sqs_client = boto3.client('sqs', **get_boto3_client_args())
 dynamodb = boto3.resource('dynamodb', **get_boto3_client_args())
+lambda_client = boto3.client('lambda', **get_boto3_client_args())
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -53,35 +58,53 @@ genai.configure(api_key=GOOGLE_API_KEY)
 def health_check():
    return 'OK', 200
 
-@app.route('/api/bill_url', methods=['GET'])
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'heic', 'tiff'}
+
+@app.route('/api/bill_url', methods=['POST'])
 def get_presigned_url():
-    file_name = f"upload_{str(uuid.uuid4())}.jpg"
-    presigned_url = s3_client.generate_presigned_url(
-        'put_object',
-        Params={'Bucket': S3_BUCKET, 'Key': file_name},
-        ExpiresIn=3600
-    )
+    data = request.json
+    connection_id = data.get('connectionId')
+    file_extension = data.get('fileExtension', '').lower()
 
-    # Generate a temporary ID for the file
-    temp_id = str(uuid.uuid4())
+    if not connection_id:
+        return jsonify({'error': 'Connection ID is required'}), 400
 
-    # Store the file name with a temporary ID
-    store_file_info(temp_id, file_name)
+    if not file_extension or file_extension not in ALLOWED_EXTENSIONS:
+        return jsonify({'error': 'Invalid or missing file extension'}), 400
 
-    return jsonify({
-        'uploadUrl': presigned_url,
-        'fileName': file_name,
-        'tempId': temp_id
-    }), 200
+    # Generate a unique filename with the provided extension
+    file_name = f"upload_{str(uuid.uuid4())}.{file_extension}"
 
-def store_file_info(temp_id, file_name):
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': S3_BUCKET,
+                'Key': file_name,
+                'ContentType': f'image/{file_extension}'
+            },
+            ExpiresIn=3600,
+            HttpMethod='PUT'
+        )
+
+        store_file_info(connection_id, file_name)
+
+        return jsonify({
+            'uploadUrl': presigned_url,
+            'fileName': file_name
+        }), 200
+
+    except ClientError as e:
+        return jsonify({'error': str(e)}), 500
+
+def store_file_info(connection_id, file_name):
     try:
         connections_table = dynamodb.Table(CONNECTIONS_TABLE)
         connections_table.put_item(
             Item={
-                'connectionId': temp_id,  # Use temp_id as the connectionId
+                'connectionId': connection_id,
                 'fileName': file_name,
-                'status': 'pending'  # Indicates that no WebSocket connection is associated yet
+                'status': 'pending'
             }
         )
     except ClientError as e:
@@ -105,10 +128,20 @@ def process_image():
     data = request.json
     file_name = data['fileName']
 
+    # Check if the file has already been processed
+    connections_table = dynamodb.Table(CONNECTIONS_TABLE)
+    db_response = connections_table.query(
+        IndexName='FileNameIndex',
+        KeyConditionExpression=boto3.dynamodb.conditions.Key('fileName').eq(file_name)
+    )
+
+    if db_response['Items'] and db_response['Items'][0].get('status') == 'processed':
+        return jsonify({'status': 'success', 'message': 'File already processed'}), 200
+
     try:
         # Download the image from S3
-        response = s3_client.get_object(Bucket=S3_BUCKET, Key=file_name)
-        image_content = response['Body'].read()
+        s3_response = s3_client.get_object(Bucket=S3_BUCKET, Key=file_name)
+        image_content = s3_response['Body'].read()
 
         # Process the image with Gemini 1.5 Flash
         gemini_response = process_with_gemini(image_content)
@@ -119,13 +152,27 @@ def process_image():
             'gemini_analysis': gemini_response
         }
 
+        # Use existing connectionId if available, otherwise generate a new one
+        connection_id = db_response['Items'][0]['connectionId'] if db_response['Items'] else str(uuid.uuid4())
+
+        # Update or create the item in the connections table with the processed status
+        connections_table.put_item(
+            Item={
+                'connectionId': connection_id,
+                'fileName': file_name,
+                'status': 'processed',
+                'results': json.dumps(processing_results)
+            }
+        )
+
         # Notify connected clients
         notify_clients(processing_results)
-
         return jsonify({'status': 'success', 'results': processing_results})
 
     except Exception as e:
         print(f"Error processing {file_name}: {str(e)}")
+        print("Stack trace:")
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def process_with_gemini(image_content):
@@ -140,7 +187,11 @@ def process_with_gemini(image_content):
     it in a clear key-value pair format.
     Provide the data in plain text without any code blocks or formatting tags.
     Ensure accuracy in the extraction of the text from the image.
-    Make a new dict of
+
+    In certain cases, the line item  price is inclusive of taxes, you need to exclude taxes from the price.
+    The tax percentage would be in the image for these cases. You can confirm this case by adding up the cost of all line items. If this total
+    matches the total amount in the bill, you need to exclude taxes from the price of each line item upto 2 decimal places.
+    Make a new json object of
     line_items: A list of items with the following details:
 
       item_name: The name of the item.
@@ -156,22 +207,60 @@ def process_with_gemini(image_content):
     # Generate content
     response = model.generate_content([prompt, {'mime_type': 'image/jpeg', 'data': image_base64}])
 
-    return response.text
+    # Extract the content from the JSON structure
+    try:
+        # Remove any triple backticks and 'json' tags
+        cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
+        # Parse the cleaned text as JSON
+        parsed_content = json.loads(cleaned_text)
+        return parsed_content
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        return {"error": "Failed to parse response as JSON", "raw_text": response.text}
+
 
 def send_to_connection(connection_id, data):
     try:
-        api_gateway_args = get_boto3_client_args()
-        api_gateway_args['endpoint_url'] = f"https://{WEBSOCKET_API}.execute-api.{AWS_REGION}.amazonaws.com/production"
+        # Extract domain and stage from the WebSocket URL
+        wss_url = WSS_URL
+        match = re.match(r'wss://([^/]+)/([^/]+)', wss_url)
+        if not match:
+            raise ValueError("Invalid WSS_URL format")
 
-        apigateway_management = boto3.client('apigatewaymanagementapi', **api_gateway_args)
-        apigateway_management.post_to_connection(
-            ConnectionId=connection_id,
-            Data=json.dumps(data)
+        domain = match.group(1)
+        stage = match.group(2)
+
+        # Prepare the event for the WebSocket Lambda
+        event = {
+            'requestContext': {
+                'domainName': domain,
+                'stage': stage,
+                'routeKey': 'sendMessage',
+                'connectionId': connection_id
+            },
+            'body': json.dumps({
+                'type': 'processed_data',
+                'payload': data
+            })
+        }
+
+        # Invoke the WebSocket Lambda
+        response = lambda_client.invoke(
+            FunctionName=WEBSOCKET_LAMBDA_NAME,
+            InvocationType='Event',
+            Payload=json.dumps(event)
         )
+
+        # Check the response
+        status_code = response['StatusCode']
+        if status_code != 202:
+            raise Exception(f"Lambda invocation failed with status code: {status_code}")
+
+        print(f"Message sent successfully to connection {connection_id}")
     except Exception as e:
         print(f"Error sending message to connection {connection_id}: {str(e)}")
         # If the connection is no longer available, remove it from the database
-        if 'GoneException' in str(e):
+        if 'GoneException' in str(e) or '410' in str(e):
             dynamodb.Table(CONNECTIONS_TABLE).delete_item(Key={'connectionId': connection_id})
 
 def notify_clients(data):

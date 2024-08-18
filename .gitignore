@@ -2,3 +2,6 @@
 /volume
 .env.local
 /__pycache__
+/.tmp
+/log
+index.html
