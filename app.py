@@ -34,6 +34,7 @@ SECRET_KEY = os.environ['SECRET_KEY']
 WSS_URL = os.environ['WSS_URL']
 WEBSOCKET_LAMBDA_NAME = os.environ['WEBSOCKET_LAMBDA_NAME']
 ENDPOINT_URL = os.environ.get('ENDPOINT_URL')
+AWS_DEFAULT_REGION = os.environ['AWS_DEFAULT_REGION']
 
 app = Flask(__name__)
 CORS(app)  # This enables CORS for all routes
