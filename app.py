@@ -81,7 +81,6 @@ def get_presigned_url():
             Params={
                 'Bucket': S3_BUCKET,
                 'Key': file_name,
-                'ContentType': f'image/{file_extension}'
             },
             ExpiresIn=3600,
             HttpMethod='PUT'
